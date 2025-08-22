@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:13
+    container_name: kurly-postgres
+    environment:
+      POSTGRES_DB: ${PGDATABASE}
+      POSTGRES_USER: ${PGUSER}
+      POSTGRES_PASSWORD: ${PGPASSWORD}
+      LC_ALL: C.UTF-8
+    ports:
+      - "${PGPORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  app:
+    build: .
+    container_name: kurly-app
+    depends_on:
+      - db
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    restart: unless-stopped
+    shm_size: '2g'
+
+volumes:
+  postgres_data:

@@ -1,0 +1,17 @@
+selenium
+webdriver-manager
+psycopg2-binary
+streamlit
+pandas
+plotly
+openai
+python-dotenv
+tqdm
+langchain
+langchain-openai
+langchain-core
+wordcloud
+matplotlib
+seaborn
+streamlit-extras
+streamlit-echarts

@@ -1,0 +1,20 @@
+# Environments
+.env
+.venv
+env/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Data files
+*.csv
+*.log
+
+# Docker
+postgres_data/
+
+# IDEs
+.idea/
+.vscode/
