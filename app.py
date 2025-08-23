@@ -120,16 +120,14 @@ def initialize_database():
                     ADD COLUMN IF NOT EXISTS improvement_suggestion TEXT,
                     ADD COLUMN IF NOT EXISTS sentiment_reason TEXT,
                     ADD COLUMN IF NOT EXISTS has_question BOOLEAN;
-                """
-                )
+                """)
                 cur.execute("ALTER TABLE review_analysis ALTER COLUMN user_persona TYPE TEXT;")
                 cur.execute("ALTER TABLE review_analysis DROP COLUMN IF EXISTS aspects;")
                 cur.execute("""
                     ALTER TABLE review_sentence_analysis
                     ADD COLUMN IF NOT EXISTS categories TEXT[],
                     ADD COLUMN IF NOT EXISTS keywords TEXT[];
-                """
-                )
+                """)
                 conn.commit()
     except Exception as e:
         st.error(f"Database initialization failed: {e}")
@@ -165,13 +163,17 @@ def generate_overall_summary(_summaries, _product_name):
         return f"AI 모델 초기화 중 오류: {e}"
 
     prompt_text = (
-        "당신은 고객 리뷰 분석 전문가입니다. 다음은 '{product_name}' 상품에 대한 고객 리뷰 핵심 요약 모음입니다. "
-        "이 요약들을 바탕으로, 고객들의 전반적인 반응과 핵심 의견을 종합하여 2~3 문장의 완성된 한글 총평을 작성해주세요. "
-        "긍정적인 부분과 부정적인 부분을 균형있게 언급하되, 홍보 문구가 아닌 객관적인 분석가의 시선으로 작성해야 합니다."
-        "만약 요약문의 양이 너무 적거나 내용이 부족하다면, 주어진 정보만으로 간단히 정리해주세요.\n\n"
+        "당신은 고객 리뷰를 심층 분석하는 전문가입니다. 다음은 '{product_name}' 상품에 대한 고객 리뷰 핵심 요약 모음입니다.\n\n"
         "--- 리뷰 핵심 요약 모음 ---\n"
         "{review_summaries}\n"
-        "---"
+        "---\n\n"
+        "위 요약들을 바탕으로, 다음 형식에 맞춰 고객 반응을 종합적인 총평으로 작성해주세요. 각 항목은 명확하고 상세하게, 전문가의 시선으로 분석해야 합니다.\n\n"
+        "**1. 주요 긍정 피드백:**\n"
+        "- (고객들이 가장 만족한 점을 2-3가지 항목으로 요약)\n\n"
+        "**2. 주요 부정 피드백:**\n"
+        "- (고객들이 가장 불만족한 점을 2-3가지 항목으로 요약)\n\n"
+        "**3. 종합의견 및 개선 제안:**\n"
+        "- (전체적인 평가와 함께, 제품/서비스가 개선될 수 있는 구체적인 방안을 제시)"
     )
     prompt = ChatPromptTemplate.from_messages([
         ("system", "You are a helpful market analysis assistant who summarizes customer feedback."),
