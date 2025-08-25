@@ -1,12 +1,11 @@
 # Python 3.11 버전의 공식 이미지를 기반으로 합니다.
 FROM python:3.11-slim
 
-# Install system dependencies for Google Chrome
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     fonts-liberation \
     fonts-nanum \
-
     libasound2 \
     libatk-bridge2.0-0 \
     libatk1.0-0 \
@@ -42,7 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     xdg-utils
 
-# Download and install Google Chrome
+
 RUN wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
     && apt-get install -y ./google-chrome-stable_current_amd64.deb \
     && rm google-chrome-stable_current_amd64.deb
