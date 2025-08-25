@@ -1,6 +1,7 @@
-# AI 기반 이커머스 리뷰 분석 대시보드
+# AI 이커머스 후기 감정 분석 대시보드
 
-이 프로젝트는 이커머스 사이트(현재는 마켓컬리)의 상품 리뷰를 수집(스크래핑)하고, LLM(거대 언어 모델)을 사용하여 심층 분석한 뒤, 그 결과를 인터랙티브 웹 대시보드로 시각화하는 솔루션입니다. 고객 피드백에 대한 깊이 있는 이해를 통해 기업이 제품의 강점, 약점 및 개선점을 파악하는 데 도움을 주는 것을 목표로 합니다.
+이 프로젝트는 마켓컬리의 상품 리뷰를 수집(크롤링)하고, LLM을 사용하여 심층 분석한 뒤, 그 결과를 스트림릿 대시보드로 시각화하는 솔루션입니다. 고객 피드백에 대한 깊이 있는 이해를 통해 기업이 제품의 강점, 
+약점 및 개선점을 파악하는 데 도움을 주는 것을 목표로 하고자 합니다.
 
 ## 🌟 주요 기능
 
@@ -22,6 +23,7 @@
     *   AI가 생성한 종합 평가 및 개선 제안을 확인합니다.
     *   원본 리뷰와 AI 분석 결과를 나란히 비교합니다.
 
+
 ## 🛠️ 기술 스택
 
 *   **Backend**: Python
@@ -32,9 +34,8 @@
 *   **Containerization**: Docker, Docker Compose
 *   **Data Manipulation & Visualization**: Pandas, Plotly, Matplotlib, Seaborn, WordCloud, ECharts
 
-## 🚀 시작하기
 
-### 사전 준비
+### 🚀 사전 준비
 
 *   [Docker Desktop](https://www.docker.com/products/docker-desktop/) 설치 및 실행
 *   [OpenAI API 키](https://platform.openai.com/account/api-keys) 발급
