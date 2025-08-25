@@ -18,22 +18,39 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from dotenv import load_dotenv
 
+import matplotlib.font_manager as fm
+
 # .env 파일 로드
 load_dotenv()
 
 # --- 페이지 설정 및 공통 함수 ---
 
-# Streamlit 페이지의 기본 환경을 설정합니다
 st.set_page_config(page_title="AI 리뷰 분석 대시보드", layout="wide")
 
-# Seaborn/Matplotlib 그래프의 한글 폰트 깨짐 방지를 위한 전역 설정입니다
+@st.cache_data
+def get_korean_font_path():
+    font_path = '/usr/share/fonts/truetype/nanum/NanumGothic.ttf'
+    if os.path.exists(font_path):
+        return font_path
+    
+    # Windows, macOS, Linux에서 일반적인 한글 폰트 경로 탐색
+    font_list = fm.findSystemFonts(fontpaths=None, fontext='ttf')
+    korean_fonts = [f for f in font_list if 'malgun' in f.lower() or 'nanum' in f.lower() or 'apple' in f.lower() or 'gothic' in f.lower()]
+    if korean_fonts:
+        return korean_fonts[0]
+    
+    # 기본 폰트 반환 (경고 표시)
+    st.warning("한글 폰트를 찾을 수 없어 기본 폰트를 사용합니다. 워드클라우드에 한글이 깨져 보일 수 있습니다.")
+    return fm.findfont('sans-serif')
+
+KOREAN_FONT_PATH = get_korean_font_path()
+
 try:
-    plt.rcParams['font.family'] = 'Malgun Gothic'
+    plt.rcParams['font.family'] = fm.FontProperties(fname=KOREAN_FONT_PATH).get_name()
     plt.rcParams['axes.unicode_minus'] = False
 except Exception as e:
-    st.error("한글 폰트를 찾을 수 없습니다. '맑은 고딕' 폰트가 설치되어 있는지 확인해주세요.")
+    st.error(f"한글 폰트 설정에 실패했습니다: {e}")
 
-# 데이터베이스 커넥션을 생성하고 캐싱하여 재사용합니다
 @st.cache_resource
 def get_conn():
     conn = psycopg2.connect(
@@ -46,7 +63,6 @@ def get_conn():
     )
     return conn
 
-# SQL 쿼리를 실행하여 결과를 DataFrame으로 반환하고 캐싱합니다
 @st.cache_data(ttl=600)
 def fetch_df(sql: str, params=None) -> pd.DataFrame:
     try:
@@ -58,13 +74,8 @@ def fetch_df(sql: str, params=None) -> pd.DataFrame:
         st.error(f"데이터 조회 중 오류 발생: {e}")
         return pd.DataFrame()
 
-# --- Database Initialization ---
 @st.cache_resource
 def initialize_database():
-    """
-    Ensures all necessary tables are created in the database.
-    Reads schema.sql and executes it.
-    """
     try:
         schema_sql = """
         CREATE TABLE IF NOT EXISTS reviews (
@@ -112,7 +123,6 @@ def initialize_database():
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(schema_sql)
-                # Also run alterations to ensure schema is up-to-date
                 cur.execute("""
                     ALTER TABLE review_analysis
                     ADD COLUMN IF NOT EXISTS summary TEXT,
@@ -133,35 +143,18 @@ def initialize_database():
         st.error(f"Database initialization failed: {e}")
         st.stop()
 
-# Call the function at the start of the app
 initialize_database()
 
 st.title("✨ AI 리뷰 분석 대시보드")
 
-# SQL 쿼리를 실행하여 결과를 DataFrame으로 반환하고 캐싱합니다
-@st.cache_data(ttl=600)
-def fetch_df(sql: str, params=None) -> pd.DataFrame:
-    try:
-        with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(sql, params or [])
-            rows = cur.fetchall()
-        return pd.DataFrame(rows)
-    except Exception as e:
-        st.error(f"데이터 조회 중 오류 발생: {e}")
-        return pd.DataFrame()
-
-# AI 총평 생성 함수
 @st.cache_data(ttl=3600, show_spinner="AI가 리뷰들을 종합하여 총평을 생성하고 있습니다...")
 def generate_overall_summary(_summaries, _product_name):
     if not _summaries:
         return "요약할 리뷰가 없습니다."
-
-    # LangChain을 사용하여 LLM 모델과 프롬프트를 설정합니다
     try:
         llm = ChatOpenAI(model="gpt-4o", temperature=0.5, max_retries=2, request_timeout=120)
     except Exception as e:
         return f"AI 모델 초기화 중 오류: {e}"
-
     prompt_text = (
         "당신은 고객 리뷰를 심층 분석하는 전문가입니다. 다음은 '{product_name}' 상품에 대한 고객 리뷰 핵심 요약 모음입니다.\n\n"
         "--- 리뷰 핵심 요약 모음 ---\n"
@@ -179,64 +172,36 @@ def generate_overall_summary(_summaries, _product_name):
         ("system", "You are a helpful market analysis assistant who summarizes customer feedback."),
         ("human", prompt_text)
     ])
-
-    # 리뷰 요약문들을 하나의 문자열로 합칩니다
     formatted_summaries = "\n- ".join(_summaries)
-    
-    # LLM 체인을 실행하여 총평을 생성합니다
     chain = prompt | llm
     try:
-        response = chain.invoke({
-            "product_name": _product_name,
-            "review_summaries": formatted_summaries
-        })
+        response = chain.invoke({"product_name": _product_name, "review_summaries": formatted_summaries})
         return response.content
     except Exception as e:
         st.error(f"AI 총평 생성 중 오류가 발생했습니다: {e}")
         return "AI 총평을 생성하는 데 실패했습니다. 잠시 후 다시 시도해주세요."
 
-# --- 메인 네비게이션 탭 ---
-
-# 앱의 메인 화면을 구성하는 3개의 최상위 탭을 생성합니다
 main_tab1, main_tab2, main_tab3 = st.tabs(["📊 통합 대시보드", "📥 데이터 수집", "🧠 AI 분석"])
 
-# --- 탭 1: 통합 대시보드 ---
 with main_tab1:
-    # --- 사이드바 필터 ---
     with st.sidebar:
         st.header("⚙️ 필터")
-        # DB에서 상품 목록을 가져와 선택 옵션을 만듭니다
-        df_products = fetch_df('''
-            SELECT DISTINCT product_name 
-            FROM reviews 
-            WHERE product_name IS NOT NULL 
-            ORDER BY product_name;
-        ''')
+        df_products = fetch_df('''SELECT DISTINCT product_name FROM reviews WHERE product_name IS NOT NULL ORDER BY product_name;''')
         product_choices = ["전체"] + (df_products["product_name"].tolist() if not df_products.empty else [])
         selected_product = st.selectbox("상품 선택", product_choices)
-
-        # 날짜 범위 선택 필터를 생성합니다
         today = date.today()
         start_date = st.date_input("시작일", today - timedelta(days=365))
         end_date = st.date_input("종료일", today)
-
-        # 키워드 검색 및 기타 필터를 생성합니다
         keyword = st.text_input("리뷰 키워드 검색 (선택 사항)")
         exclude_recipe = st.checkbox("레시피성 후기 제외", value=True)
-
         st.divider()
         if st.button("🔄 캐시 지우고 새로고침"):
             st.cache_data.clear()
             st.cache_resource.clear()
             st.rerun()
 
-    # --- 필터링 SQL 조건 생성 ---
-    # 선택된 필터 값들을 기반으로 SQL의 WHERE 절을 동적으로 구성합니다
     params = [start_date, end_date]
-    where_clauses = [
-        "a.is_actual_review = true",
-        "(r.review_date BETWEEN %s AND %s)"
-    ]
+    where_clauses = ["a.is_actual_review = true", "(r.review_date BETWEEN %s AND %s)"]
     if selected_product != "전체":
         where_clauses.append("r.product_name = %s")
         params.append(selected_product)
@@ -247,10 +212,7 @@ with main_tab1:
         where_clauses.append("a.is_recipe_like = false")
     WHERE_SQL = " AND ".join(where_clauses)
 
-    # --- 대시보드 상단 요약 정보 ---
-    # 펼침/접기 가능한 메뉴로 전체 데이터 현황을 보여줍니다
     with st.expander("📊 대시보드 전체 현황 보기", expanded=True):
-        # DB의 각 테이블별 데이터 총 개수를 보여주는 메트릭입니다
         c1, c2, c3 = st.columns(3)
         try:
             reviews_count = fetch_df("SELECT COUNT(*) as count FROM reviews").iloc[0]['count']
@@ -267,9 +229,7 @@ with main_tab1:
             c3.metric("분석된 문장 수", f"{sentence_count} 건")
         except Exception as e:
             c3.metric("분석된 문장 수", "오류", help=str(e))
-        
         st.divider()
-        # 리뷰가 많은 상위 5개 상품의 핵심 지표를 보여주는 리더보드입니다
         st.markdown("##### ⭐ 주요 상품 현황 (리뷰 수 기준 TOP 5)")
         sql_leaderboard = f'''
             SELECT r.product_name, COUNT(r.id) as review_count,
@@ -283,7 +243,6 @@ with main_tab1:
         df_leaderboard = fetch_df(sql_leaderboard)
         if not df_leaderboard.empty:
             df_leaderboard["sentiment_dist"] = df_leaderboard.apply(lambda row: [row['positive_reviews'], row['negative_reviews']], axis=1)
-            # st.dataframe의 column_config를 사용하여 표 내부를 시각화합니다
             st.dataframe(df_leaderboard, 
                 column_config={
                     "product_name": st.column_config.TextColumn("상품명", width="large"),
@@ -296,11 +255,8 @@ with main_tab1:
             )
     st.divider()
 
-    # --- 대시보드 상세 탭 ---
-    # 선택된 필터 조건에 대한 상세 분석을 보여주는 탭 메뉴입니다
     d_tab1, d_tab2, d_tab3, d_tab4, d_tab5 = st.tabs(["📊 요약", "🗂️ 카테고리 분석", "🔑 키워드 분석", "✍️ 리뷰 원문", "❓ 도움말"])
     
-    # 요약 탭: 선택된 데이터의 핵심 지표와 분포를 보여줍니다
     with d_tab1:
         st.subheader(f"📈 '{selected_product}' 상품 핵심 지표")
         sql_kpi = f"SELECT COALESCE(ROUND(AVG(a.star_rating)::numeric, 2), 0) as avg_rating, COUNT(r.id) as total_reviews, COALESCE(SUM(CASE WHEN a.sentiment_label = 'positive' THEN 1 ELSE 0 END), 0) as positive_reviews, COALESCE(SUM(CASE WHEN a.sentiment_label = 'negative' THEN 1 ELSE 0 END), 0) as negative_reviews FROM reviews r JOIN review_analysis a ON r.id = a.review_id WHERE {WHERE_SQL}"
@@ -313,7 +269,6 @@ with main_tab1:
             pos_ratio = (kpi["positive_reviews"] / total_sentiments) * 100 if total_sentiments > 0 else 0
             avg_rating_value = float(kpi['avg_rating'])
             
-            # KPI를 카드 형태로 시각화합니다
             col1, col2, col3 = st.columns(3)
             with col1:
                 with st.container(border=True, height=150):
@@ -340,37 +295,61 @@ with main_tab1:
             
             st.divider()
 
-            # --- AI 종합 평가 & 주요 구매자 유형 ---
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.subheader("📝 AI 종합 평가")
-                with st.container(border=True, height=250):
-                    # 필터링된 리뷰들의 개별 요약문을 가져옵니다
-                    sql_summaries = f"SELECT a.summary FROM review_analysis a JOIN reviews r ON a.review_id = r.id WHERE {WHERE_SQL} AND a.summary IS NOT NULL"
-                    df_summaries = fetch_df(sql_summaries, params)
-                    
-                    if not df_summaries.empty:
-                        summaries_list = df_summaries['summary'].tolist()
-                        # AI를 호출하여 종합 요약을 생성합니다
-                        overall_summary = generate_overall_summary(summaries_list, selected_product)
-                        st.markdown(overall_summary)
-                    else:
-                        st.info("종합 평가를 생성하기에 충분한 리뷰 요약 데이터가 없습니다.")
-            
-            with col2:
-                st.subheader("👥 주요 구매자 유형")
-                with st.container(border=True, height=250):
-                    sql_personas = f"SELECT user_persona, COUNT(*) as count FROM review_analysis a JOIN reviews r ON a.review_id = r.id WHERE {WHERE_SQL} AND a.user_persona IS NOT NULL GROUP BY user_persona ORDER BY count DESC LIMIT 5"
-                    df_personas = fetch_df(sql_personas, params)
-                    if not df_personas.empty:
-                        df_personas.set_index('user_persona', inplace=True)
-                        st.bar_chart(df_personas['count'])
-                    else:
-                        st.info("구매자 유형을 분석하기에 데이터가 부족합니다.")
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                st.markdown("**🙂 긍/부정 리뷰 비율**")
+                if total_sentiments > 0:
+                    fig_pie = go.Figure(data=[go.Pie(labels=['긍정', '부정'], values=[kpi["positive_reviews"], kpi["negative_reviews"]], hole=.6, marker_colors=['#3A7DFF', '#E9ECEF'], hoverinfo='label+percent', textinfo='none')])
+                    fig_pie.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), annotations=[dict(text=f"<b>{pos_ratio:.1f}%</b>", x=0.5, y=0.5, font_size=28, showarrow=False, font_family="Arial")])
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                else:
+                    st.info("데이터가 부족하여 차트를 표시할 수 없습니다.")
+            with c2:
+                st.markdown("**⭐ AI 예측 평점 분포**")
+                sql_rating_dist = f"SELECT star_rating, COUNT(*) as count FROM review_analysis a JOIN reviews r ON a.review_id = r.id WHERE {WHERE_SQL} AND a.star_rating IS NOT NULL GROUP BY star_rating ORDER BY star_rating"
+                df_rating_dist = fetch_df(sql_rating_dist, params)
+                if not df_rating_dist.empty:
+                    def rating_to_stars_label(rating):
+                        rating = float(rating)
+                        full_star = '★'; empty_star = '☆'
+                        full_stars = int(rating)
+                        half_star = 1 if rating - full_stars >= 0.5 else 0
+                        empty_stars = 5 - full_stars - half_star
+                        return f"{full_star * full_stars}{full_star * half_star}{empty_star * empty_stars}"
+                    df_rating_dist['star_label'] = df_rating_dist['star_rating'].apply(lambda r: f"{rating_to_stars_label(r)} ({r})")
+                    fig = px.bar(df_rating_dist, x='star_label', y='count', color='star_rating', color_continuous_scale=px.colors.sequential.YlOrRd, text='count')
+                    fig.update_layout(xaxis_title="AI Predicted Rating", yaxis_title="Review Count", showlegend=False, coloraxis_showscale=False, uniformtext_minsize=8, uniformtext_mode='hide')
+                    fig.update_traces(textposition='outside', hovertemplate='<b>Rating: %{customdata[0]}</b><br>Count: %{y}<extra></extra>', customdata=df_rating_dist[['star_rating']])
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("분포를 그리기에 데이터가 부족합니다.")
 
             st.divider()
 
-            # --- AI가 분석한 주요 강점, 약점 및 개선 제안 ---
+            st.subheader("📝 AI 종합 평가")
+            with st.container(border=True):
+                sql_summaries = f"SELECT a.summary FROM review_analysis a JOIN reviews r ON a.review_id = r.id WHERE {WHERE_SQL} AND a.summary IS NOT NULL"
+                df_summaries = fetch_df(sql_summaries, params)
+                if not df_summaries.empty:
+                    summaries_list = df_summaries['summary'].tolist()
+                    overall_summary = generate_overall_summary(summaries_list, selected_product)
+                    st.markdown(overall_summary)
+                else:
+                    st.info("종합 평가를 생성하기에 충분한 리뷰 요약 데이터가 없습니다.")
+            
+            st.subheader("👥 주요 구매자 유형")
+            with st.container(border=True):
+                sql_personas = f"SELECT user_persona, COUNT(*) as count FROM review_analysis a JOIN reviews r ON a.review_id = r.id WHERE {WHERE_SQL} AND a.user_persona IS NOT NULL GROUP BY user_persona ORDER BY count DESC LIMIT 5"
+                df_personas = fetch_df(sql_personas, params)
+                if not df_personas.empty:
+                    fig = px.bar(df_personas, x='user_persona', y='count', title='주요 구매자 유형 Top 5', text_auto=True)
+                    fig.update_layout(xaxis_title="구매자 유형", yaxis_title="리뷰 수")
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("구매자 유형을 분석하기에 데이터가 부족합니다.")
+
+            st.divider()
+
             c1, c2 = st.columns(2)
             with c1:
                 st.subheader("📊 주요 강점 및 약점")
@@ -415,38 +394,6 @@ with main_tab1:
                     else:
                         st.info("AI가 제안한 개선점이 없습니다.")
 
-            st.divider()
-            # 긍/부정 비율과 평점 분포를 그래프로 보여줍니다
-            c1, c2 = st.columns([1, 2])
-            with c1:
-                st.markdown("**🙂 긍/부정 리뷰 비율**")
-                if total_sentiments > 0:
-                    fig_pie = go.Figure(data=[go.Pie(labels=['긍정', '부정'], values=[kpi["positive_reviews"], kpi["negative_reviews"]], hole=.6, marker_colors=['#3A7DFF', '#E9ECEF'], hoverinfo='label+percent', textinfo='none')])
-                    fig_pie.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), annotations=[dict(text=f"<b>{pos_ratio:.1f}%</b>", x=0.5, y=0.5, font_size=28, showarrow=False, font_family="Arial")])
-                    st.plotly_chart(fig_pie, use_container_width=True)
-                else:
-                    st.info("데이터가 부족하여 차트를 표시할 수 없습니다.")
-            with c2:
-                st.markdown("**⭐ AI 예측 평점 분포**")
-                sql_rating_dist = f"SELECT star_rating, COUNT(*) as count FROM review_analysis a JOIN reviews r ON a.review_id = r.id WHERE {WHERE_SQL} AND a.star_rating IS NOT NULL GROUP BY star_rating ORDER BY star_rating"
-                df_rating_dist = fetch_df(sql_rating_dist, params)
-                if not df_rating_dist.empty:
-                    def rating_to_stars_label(rating):
-                        rating = float(rating)
-                        full_star = '★'; empty_star = '☆'
-                        full_stars = int(rating)
-                        half_star = 1 if rating - full_stars >= 0.5 else 0
-                        empty_stars = 5 - full_stars - half_star
-                        return f"{full_star * full_stars}{full_star * half_star}{empty_star * empty_stars}"
-                    df_rating_dist['star_label'] = df_rating_dist['star_rating'].apply(lambda r: f"{rating_to_stars_label(r)} ({r})")
-                    fig = px.bar(df_rating_dist, x='star_label', y='count', color='star_rating', color_continuous_scale=px.colors.sequential.YlOrRd, text='count')
-                    fig.update_layout(xaxis_title="AI Predicted Rating", yaxis_title="Review Count", showlegend=False, coloraxis_showscale=False, uniformtext_minsize=8, uniformtext_mode='hide')
-                    fig.update_traces(textposition='outside', hovertemplate='<b>Rating: %{customdata[0]}</b><br>Count: %{y}<extra></extra>', customdata=df_rating_dist[['star_rating']])
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("분포를 그리기에 데이터가 부족합니다.")
-
-    # 카테고리 분석 탭: 카테고리별로 데이터를 심층 분석합니다
     with d_tab2:
         st.subheader("🗂️ 카테고리별 상세 분석")
         st.markdown("**카테고리별 긍/부정 리뷰 비율**")
@@ -513,7 +460,7 @@ with main_tab1:
         if not df_keywords.empty:
             c1, c2 = st.columns(2)
             try:
-                font_path = '/usr/share/fonts/truetype/nanum/NanumGothic.ttf'
+                font_path = KOREAN_FONT_PATH
                 pos_text = " ".join(df_keywords[df_keywords['sentiment_label'] == 'positive']['keyword'])
                 neg_text = " ".join(df_keywords[df_keywords['sentiment_label'] == 'negative']['keyword'])
                 with c1:
@@ -570,28 +517,34 @@ with main_tab1:
 with main_tab2:
     st.header("📥 데이터 수집 (웹 크롤링)")
     st.markdown("이 페이지에서 마켓컬리 웹사이트로부터 최신 리뷰 데이터를 수집(크롤링)할 수 있습니다.")
+    
+    url_to_crawl = st.text_input("크롤링할 상품 URL", "https://www.kurly.com/goods/5131413")
+
     if st.button("크롤링 시작하기", type="primary"):
-        script_path = "kurly.py"
-        if not os.path.exists(script_path):
-            st.error(f"`{script_path}` 파일을 찾을 수 없습니다.")
+        if not url_to_crawl:
+            st.warning("크롤링할 URL을 입력해주세요.")
         else:
-            st.info("크롤링을 시작합니다...")
-            log_area = st.empty()
-            log_text = ""
-            try:
-                process = subprocess.Popen([sys.executable, "-u", script_path], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
-                for line in iter(process.stdout.readline, ''):
-                    log_text += line
-                    log_area.code(log_text, language='log')
-                process.stdout.close()
-                process.wait()
-                if process.returncode == 0:
-                    st.success("✅ 크롤링이 성공적으로 완료되었습니다!")
-                    st.balloons()
-                else:
-                    st.error("❌ 크롤링 중 오류가 발생했습니다.")
-            except Exception as e:
-                st.error(f"스크립트 실행 중 예외가 발생했습니다: {e}")
+            script_path = "kurly.py"
+            if not os.path.exists(script_path):
+                st.error(f"`{script_path}` 파일을 찾을 수 없습니다.")
+            else:
+                st.info(f"크롤링을 시작합니다: {url_to_crawl}")
+                log_area = st.empty()
+                log_text = ""
+                try:
+                    process = subprocess.Popen([sys.executable, "-u", script_path, url_to_crawl], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
+                    for line in iter(process.stdout.readline, ''):
+                        log_text += line
+                        log_area.code(log_text, language='log')
+                    process.stdout.close()
+                    process.wait()
+                    if process.returncode == 0:
+                        st.success("✅ 크롤링이 성공적으로 완료되었습니다!")
+                        st.balloons()
+                    else:
+                        st.error("❌ 크롤링 중 오류가 발생했습니다.")
+                except Exception as e:
+                    st.error(f"스크립트 실행 중 예외가 발생했습니다: {e}")
 
 # --- 탭 3: AI 분석 ---
 with main_tab3:
@@ -620,7 +573,7 @@ with main_tab3:
             except Exception as e:
                 st.error(f"스크립트 실행 중 예외가 발생했습니다: {e}")
     st.divider()
-    st.subheader("참고: 데이터베이스 초기화")
+    st.subheader("데이터베이스 초기화")
     if st.button("모든 데이터 삭제하기", type="secondary"):
         try:
             with get_conn() as conn, conn.cursor() as cur:
