@@ -15,6 +15,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.pydantic_v1 import BaseModel, Field
 from typing import List, Optional
+from openai import APIError
 
 # Windows 환경의 subprocess에서 한글 출력이 깨지는 현상 방지
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -45,72 +46,7 @@ CATEGORIES = ["맛", "가격/가성비", "품질/신선도", "양", "포장/배�
 def get_conn():
     return psycopg2.connect(**PG, client_encoding='utf8')
 
-# 분석 결과를 저장할 테이블들의 구조를 확인하고, 없으면 생성하거나 변경합니다
-def ensure_analysis_tables_exist():
-    with get_conn() as conn, conn.cursor() as cur:
-        print("데이터베이스 테이블 구조를 확인하고 필요시 생성 및 업데이트합니다...")
 
-        # 리뷰 전체 분석 결과를 저장할 테이블을 생성합니다
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS review_analysis (
-                id SERIAL PRIMARY KEY,
-                review_id BIGINT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
-                model_name VARCHAR(50) NOT NULL,
-                is_actual_review BOOLEAN NOT NULL,
-                keywords TEXT[],
-                categories TEXT[],
-                sentiment_label VARCHAR(20),
-                sentiment_score REAL,
-                star_rating REAL,
-                is_recipe_like BOOLEAN,
-                summary TEXT,
-                user_persona TEXT,
-                improvement_suggestion TEXT,
-                sentiment_reason TEXT,
-                has_question BOOLEAN,
-                raw_json JSONB,
-                analyzed_at TIMESTAMPTZ DEFAULT now(),
-                UNIQUE (review_id, model_name)
-            );
-        """)
-        # 이전 버전과의 호환성을 위해 신규 컬럼이 없으면 추가합니다
-        cur.execute("""
-            ALTER TABLE review_analysis
-            ADD COLUMN IF NOT EXISTS summary TEXT,
-            ADD COLUMN IF NOT EXISTS user_persona TEXT,
-            ADD COLUMN IF NOT EXISTS improvement_suggestion TEXT,
-            ADD COLUMN IF NOT EXISTS sentiment_reason TEXT,
-            ADD COLUMN IF NOT EXISTS has_question BOOLEAN;
-        """)
-        # user_persona 컬럼의 타입을 텍스트 길이 제한이 없도록 변경합니다
-        cur.execute("ALTER TABLE review_analysis ALTER COLUMN user_persona TYPE TEXT;")
-        # 더 이상 사용하지 않는 aspects 컬럼을 삭제합니다
-        cur.execute("ALTER TABLE review_analysis DROP COLUMN IF EXISTS aspects;")
-
-        # 문장 단위 분석 결과를 저장할 테이블을 생성합니다
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS review_sentence_analysis (
-                id SERIAL PRIMARY KEY,
-                review_id BIGINT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
-                sent_index INTEGER NOT NULL,
-                sentence TEXT,
-                sentiment_label VARCHAR(20),
-                sentiment_score REAL,
-                model_name VARCHAR(50) NOT NULL,
-                categories TEXT[],
-                keywords TEXT[],
-                analyzed_at TIMESTAMPTZ DEFAULT now(),
-                UNIQUE (review_id, sent_index, model_name)
-            );
-        """)
-        # 이전 버전과의 호환성을 위해 신규 컬럼이 없으면 추가합니다
-        cur.execute("""
-            ALTER TABLE review_sentence_analysis
-            ADD COLUMN IF NOT EXISTS categories TEXT[],
-            ADD COLUMN IF NOT EXISTS keywords TEXT[];
-        """)
-        conn.commit()
-        print("테이블 구조 확인 및 업데이트 완료.")
 
 # 아직 분석되지 않은 리뷰를 데이터베이스에서 가져오는 함수입니다
 def fetch_unanalyzed_reviews(limit=BATCH_SIZE):
@@ -236,8 +172,6 @@ chain = prompt | structured_llm
 
 # 이 스크립트가 직접 실행될 때 동작하는 메인 함수입니다
 def main():
-    # DB 테이블이 준비되었는지 확인하고, 없으면 생성합니다
-    ensure_analysis_tables_exist()
     print("리뷰 분석을 시작합니다...")
     
     # 분석할 리뷰가 없을 때까지 무한 루프를 돕니다
@@ -310,10 +244,18 @@ def main():
                             sent.sentiment_score, MODEL_NAME, sent.categories, sent.keywords
                         ))
 
-            # 분석 중 어떤 종류의 오류든 발생하면, 로그를 남기고 다음 리뷰로 넘어갑니다
+            except (psycopg2.Error, APIError) as e:
+                review_content_safe = review['content'][:200].encode('utf-8', 'replace').decode('utf-8')
+                print(f"\n--- ERROR: 리뷰 ID {review['id']} 처리 중 DB 또는 API 오류 발생 ---")
+                print(f"리뷰 내용 (앞 200자): {review_content_safe}...")
+                print(f"오류 유형: {type(e).__name__}")
+                print(f"오류 메시지: {e}")
+                traceback.print_exc()
+                print("-------------------------------------------------")
+                continue
             except Exception as e:
                 review_content_safe = review['content'][:200].encode('utf-8', 'replace').decode('utf-8')
-                print(f"\n--- ERROR: 리뷰 ID {review['id']} 분석 실패 ---")
+                print(f"\n--- ERROR: 리뷰 ID {review['id']} 분석 중 예상치 못한 오류 발생 ---")
                 print(f"리뷰 내용 (앞 200자): {review_content_safe}...")
                 print(f"오류 유형: {type(e).__name__}")
                 print(f"오류 메시지: {e}")

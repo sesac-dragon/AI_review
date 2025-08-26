@@ -27,6 +27,21 @@ load_dotenv()
 
 st.set_page_config(page_title="AI 리뷰 분석 대시보드", layout="wide")
 
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap');
+    
+    /* Streamlit의 기본 폰트를 Noto Sans KR로 변경 */
+    body, .st-emotion-cache-1v0mbdj, .st-emotion-cache-1dp5vir, .st-emotion-cache-1r4qj8v, .st-emotion-cache-1kyxreq, .st-emotion-cache-1y4p8pa, .st-emotion-cache-1f1G2Y5 {
+        font-family: 'Noto Sans KR', sans-serif;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
 @st.cache_data
 def get_korean_font_path():
     font_path = '/usr/share/fonts/truetype/nanum/NanumGothic.ttf'
@@ -193,7 +208,7 @@ with main_tab1:
         start_date = st.date_input("시작일", today - timedelta(days=365))
         end_date = st.date_input("종료일", today)
         keyword = st.text_input("리뷰 키워드 검색 (선택 사항)")
-        exclude_recipe = st.checkbox("레시피성 후기 제외", value=True)
+        exclude_recipe = st.checkbox("레시피성 후기 제외", value=False)
         st.divider()
         if st.button("🔄 캐시 지우고 새로고침"):
             st.cache_data.clear()
@@ -299,7 +314,7 @@ with main_tab1:
             with c1:
                 st.markdown("**🙂 긍/부정 리뷰 비율**")
                 if total_sentiments > 0:
-                    fig_pie = go.Figure(data=[go.Pie(labels=['긍정', '부정'], values=[kpi["positive_reviews"], kpi["negative_reviews"]], hole=.6, marker_colors=['#3A7DFF', '#E9ECEF'], hoverinfo='label+percent', textinfo='none')])
+                    fig_pie = go.Figure(data=[go.Pie(labels=['긍정', '부정'], values=[kpi["positive_reviews"], kpi["negative_reviews"]], hole=.6, marker_colors=['#5f0080', '#E9ECEF'], hoverinfo='label+percent', textinfo='none')])
                     fig_pie.update_layout(showlegend=False, margin=dict(t=0, b=0, l=0, r=0), annotations=[dict(text=f"<b>{pos_ratio:.1f}%</b>", x=0.5, y=0.5, font_size=28, showarrow=False, font_family="Arial")])
                     st.plotly_chart(fig_pie, use_container_width=True)
                 else:
@@ -326,8 +341,7 @@ with main_tab1:
 
             st.divider()
 
-            st.subheader("📝 AI 종합 평가")
-            with st.container(border=True):
+            with st.expander("📝 AI 종합 평가", expanded=True):
                 sql_summaries = f"SELECT a.summary FROM review_analysis a JOIN reviews r ON a.review_id = r.id WHERE {WHERE_SQL} AND a.summary IS NOT NULL"
                 df_summaries = fetch_df(sql_summaries, params)
                 if not df_summaries.empty:
@@ -337,8 +351,7 @@ with main_tab1:
                 else:
                     st.info("종합 평가를 생성하기에 충분한 리뷰 요약 데이터가 없습니다.")
             
-            st.subheader("👥 주요 구매자 유형")
-            with st.container(border=True):
+            with st.expander("👥 주요 구매자 유형"):
                 sql_personas = f"SELECT user_persona, COUNT(*) as count FROM review_analysis a JOIN reviews r ON a.review_id = r.id WHERE {WHERE_SQL} AND a.user_persona IS NOT NULL GROUP BY user_persona ORDER BY count DESC LIMIT 5"
                 df_personas = fetch_df(sql_personas, params)
                 if not df_personas.empty:
@@ -348,51 +361,50 @@ with main_tab1:
                 else:
                     st.info("구매자 유형을 분석하기에 데이터가 부족합니다.")
 
-            st.divider()
-
-            c1, c2 = st.columns(2)
-            with c1:
-                st.subheader("📊 주요 강점 및 약점")
-                sql_cat_summary = f"SELECT cat, sentiment_label, COUNT(*) as review_count FROM review_analysis a JOIN reviews r ON a.review_id = r.id CROSS JOIN unnest(a.categories) as cat WHERE {WHERE_SQL} AND sentiment_label IN ('positive', 'negative') GROUP BY cat, sentiment_label"
-                df_cat_summary = fetch_df(sql_cat_summary, params)
-                if not df_cat_summary.empty:
-                    with st.container(border=True, height=280):
-                        col1_sub, col2_sub = st.columns(2)
-                        with col1_sub:
-                            st.markdown("<h5>👍 강점</h5>", unsafe_allow_html=True)
-                            pos_cats = df_cat_summary[df_cat_summary['sentiment_label'] == 'positive'].nlargest(3, 'review_count')
-                            if not pos_cats.empty:
-                                for index, row in pos_cats.iterrows():
-                                    sql_keywords = f"SELECT keyword, COUNT(*) as count FROM (SELECT unnest(keywords) as keyword FROM review_analysis a JOIN reviews r ON a.review_id = r.id WHERE {WHERE_SQL} AND a.sentiment_label = 'positive' AND %s = ANY(a.categories)) as kw WHERE keyword IS NOT NULL GROUP BY keyword ORDER BY count DESC LIMIT 3"
-                                    df_keywords = fetch_df(sql_keywords, params + [row['cat']])
-                                    keywords_str = ", ".join(df_keywords['keyword'].tolist()) if not df_keywords.empty else ""
-                                    st.markdown(f"- **{row['cat']}** ({row['review_count']} 건) <br> &nbsp; *<span style='color: #666;'>{keywords_str}</span>*", unsafe_allow_html=True)
-                            else:
-                                st.info("분석된 강점이 없습니다.")
-                        with col2_sub:
-                            st.markdown("<h5>👎 약점</h5>", unsafe_allow_html=True)
-                            neg_cats = df_cat_summary[df_cat_summary['sentiment_label'] == 'negative'].nlargest(3, 'review_count')
-                            if not neg_cats.empty:
-                                for index, row in neg_cats.iterrows():
-                                    sql_keywords = f"SELECT keyword, COUNT(*) as count FROM (SELECT unnest(keywords) as keyword FROM review_analysis a JOIN reviews r ON a.review_id = r.id WHERE {WHERE_SQL} AND a.sentiment_label = 'negative' AND %s = ANY(a.categories)) as kw WHERE keyword IS NOT NULL GROUP BY keyword ORDER BY count DESC LIMIT 3"
-                                    df_keywords = fetch_df(sql_keywords, params + [row['cat']])
-                                    keywords_str = ", ".join(df_keywords['keyword'].tolist()) if not df_keywords.empty else ""
-                                    st.markdown(f"- **{row['cat']}** ({row['review_count']} 건) <br> &nbsp; *<span style='color: #666;'>{keywords_str}</span>*", unsafe_allow_html=True)
-                            else:
-                                st.info("분석된 약점이 없습니다.")
-                else:
-                    st.info("강점/약점 분석을 위한 데이터가 부족합니다.")
-            
-            with c2:
-                st.subheader("💡 AI의 개선 제안")
-                sql_suggestions = f"SELECT DISTINCT improvement_suggestion FROM review_analysis a JOIN reviews r ON a.review_id = r.id WHERE {WHERE_SQL} AND a.improvement_suggestion IS NOT NULL LIMIT 5"
-                df_suggestions = fetch_df(sql_suggestions, params)
-                with st.container(border=True, height=280):
-                    if not df_suggestions.empty:
-                        for suggestion in df_suggestions['improvement_suggestion']:
-                            st.info(f"💡 {suggestion}")
+            with st.expander("💡 주요 강점, 약점 및 개선 제안"):
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.subheader("📊 주요 강점 및 약점")
+                    sql_cat_summary = f"SELECT cat, sentiment_label, COUNT(*) as review_count FROM review_analysis a JOIN reviews r ON a.review_id = r.id CROSS JOIN unnest(a.categories) as cat WHERE {WHERE_SQL} AND sentiment_label IN ('positive', 'negative') GROUP BY cat, sentiment_label"
+                    df_cat_summary = fetch_df(sql_cat_summary, params)
+                    if not df_cat_summary.empty:
+                        with st.container(border=True, height=280):
+                            col1_sub, col2_sub = st.columns(2)
+                            with col1_sub:
+                                st.markdown("<h5>👍 강점</h5>", unsafe_allow_html=True)
+                                pos_cats = df_cat_summary[df_cat_summary['sentiment_label'] == 'positive'].nlargest(3, 'review_count')
+                                if not pos_cats.empty:
+                                    for index, row in pos_cats.iterrows():
+                                        sql_keywords = f"SELECT keyword, COUNT(*) as count FROM (SELECT unnest(keywords) as keyword FROM review_analysis a JOIN reviews r ON a.review_id = r.id WHERE {WHERE_SQL} AND a.sentiment_label = 'positive' AND %s = ANY(a.categories)) as kw WHERE keyword IS NOT NULL GROUP BY keyword ORDER BY count DESC LIMIT 3"
+                                        df_keywords = fetch_df(sql_keywords, params + [row['cat']])
+                                        keywords_str = ", ".join(df_keywords['keyword'].tolist()) if not df_keywords.empty else ""
+                                        st.markdown(f"- **{row['cat']}** ({row['review_count']} 건) <br> &nbsp; *<span style='color: #666;'>{keywords_str}</span>*", unsafe_allow_html=True)
+                                else:
+                                    st.info("분석된 강점이 없습니다.")
+                            with col2_sub:
+                                st.markdown("<h5>👎 약점</h5>", unsafe_allow_html=True)
+                                neg_cats = df_cat_summary[df_cat_summary['sentiment_label'] == 'negative'].nlargest(3, 'review_count')
+                                if not neg_cats.empty:
+                                    for index, row in neg_cats.iterrows():
+                                        sql_keywords = f"SELECT keyword, COUNT(*) as count FROM (SELECT unnest(keywords) as keyword FROM review_analysis a JOIN reviews r ON a.review_id = r.id WHERE {WHERE_SQL} AND a.sentiment_label = 'negative' AND %s = ANY(a.categories)) as kw WHERE keyword IS NOT NULL GROUP BY keyword ORDER BY count DESC LIMIT 3"
+                                        df_keywords = fetch_df(sql_keywords, params + [row['cat']])
+                                        keywords_str = ", ".join(df_keywords['keyword'].tolist()) if not df_keywords.empty else ""
+                                        st.markdown(f"- **{row['cat']}** ({row['review_count']} 건) <br> &nbsp; *<span style='color: #666;'>{keywords_str}</span>*", unsafe_allow_html=True)
+                                else:
+                                    st.info("분석된 약점이 없습니다.")
                     else:
-                        st.info("AI가 제안한 개선점이 없습니다.")
+                        st.info("강점/약점 분석을 위한 데이터가 부족합니다.")
+                
+                with c2:
+                    st.subheader("💡 AI의 개선 제안")
+                    sql_suggestions = f"SELECT DISTINCT improvement_suggestion FROM review_analysis a JOIN reviews r ON a.review_id = r.id WHERE {WHERE_SQL} AND a.improvement_suggestion IS NOT NULL LIMIT 5"
+                    df_suggestions = fetch_df(sql_suggestions, params)
+                    with st.container(border=True, height=280):
+                        if not df_suggestions.empty:
+                            for suggestion in df_suggestions['improvement_suggestion']:
+                                st.info(f"💡 {suggestion}")
+                        else:
+                            st.info("AI가 제안한 개선점이 없습니다.")
 
     with d_tab2:
         st.subheader("🗂️ 카테고리별 상세 분석")
@@ -460,31 +472,41 @@ with main_tab1:
         if not df_keywords.empty:
             c1, c2 = st.columns(2)
             try:
-                font_path = KOREAN_FONT_PATH
+                # Docker 컨테이너 내의 고정된 폰트 경로를 사용합니다.
+                font_path = '/usr/share/fonts/truetype/nanum/NanumGothic.ttf'
                 pos_text = " ".join(df_keywords[df_keywords['sentiment_label'] == 'positive']['keyword'])
                 neg_text = " ".join(df_keywords[df_keywords['sentiment_label'] == 'negative']['keyword'])
+                
                 with c1:
                     st.markdown("<p style='text-align: center;'>🙂 긍정 키워드</p>", unsafe_allow_html=True)
                     if pos_text.strip():
-                        wc_pos = WordCloud(font_path=font_path, background_color="white", width=400, height=300).generate(pos_text)
-                        fig, ax = plt.subplots()
-                        ax.imshow(wc_pos, interpolation='bilinear')
-                        ax.axis("off")
-                        st.pyplot(fig)
+                        try:
+                            wc_pos = WordCloud(font_path=font_path, background_color="#FFFFFF", width=400, height=300).generate(pos_text)
+                            fig, ax = plt.subplots()
+                            ax.imshow(wc_pos, interpolation='bilinear')
+                            ax.axis("off")
+                            st.pyplot(fig)
+                        except Exception as e:
+                            st.error(f"긍정 키워드 워드클라우드 생성 오류: {e}")
                     else:
                         st.info("긍정 키워드가 없습니다.")
+
                 with c2:
                     st.markdown("<p style='text-align: center;'>🙁 부정 키워드</p>", unsafe_allow_html=True)
                     if neg_text.strip():
-                        wc_neg = WordCloud(font_path=font_path, background_color="white", width=400, height=300).generate(neg_text)
-                        fig, ax = plt.subplots()
-                        ax.imshow(wc_neg, interpolation='bilinear')
-                        ax.axis("off")
-                        st.pyplot(fig)
+                        try:
+                            wc_neg = WordCloud(font_path=font_path, background_color="#FFFFFF", width=400, height=300, colormap='Reds').generate(neg_text)
+                            fig, ax = plt.subplots()
+                            ax.imshow(wc_neg, interpolation='bilinear')
+                            ax.axis("off")
+                            st.pyplot(fig)
+                        except Exception as e:
+                            st.error(f"부정 키워드 워드클라우드 생성 오류: {e}")
                     else:
                         st.info("부정 키워드가 없습니다.")
+
             except Exception as e:
-                st.error(f"워드클라우드 생성 중 오류: {e}. 폰트 경로를 확인하세요.")
+                st.error(f"워드클라우드 데이터 처리 중 오류: {e}")
         else:
             st.info("키워드 분석을 위한 데이터가 부족합니다.")
 
@@ -511,7 +533,6 @@ with main_tab1:
             #### 데이터 원본
             - 마켓컬리의 특정 상품 페이지들에서 수집된 공개 사용자 리뷰를 기반으로 합니다.
             ''')
-        st.markdown("### AI 리뷰 분석 대시보드 사용법")
 
 # --- 탭 2: 데이터 수집 ---
 with main_tab2:
