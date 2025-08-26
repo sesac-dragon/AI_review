@@ -27,7 +27,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 load_dotenv()
 
 # 크롤링할 최대 페이지 수를 정의합니다
-MAX_PAGES   = 10
+MAX_PAGES   = 30
 # 웹 페이지 로딩을 기다릴 최대 시간(초)을 정의합니다
 WAIT_SEC    = 15
 # 페이지 이동 등 작업 후 잠시 기다릴 시간(초)을 정의합니다
