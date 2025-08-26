@@ -7,10 +7,11 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # 필요한 라이브러리들을 불러옵니다
 from dotenv import load_dotenv
-import csv, os, re, time, hashlib, json
+import os, re, time, hashlib, json
 from dataclasses import dataclass
 from typing import List, Optional, Set
 from datetime import datetime
+import argparse
 
 # 웹 브라우저 제어를 위한 Selenium 관련 라이브러리들을 불러옵니다
 from selenium import webdriver
@@ -25,18 +26,12 @@ from webdriver_manager.chrome import ChromeDriverManager
 # .env 파일에서 환경 변수를 불러옵니다
 load_dotenv()
 
-# 크롤링할 상품 페이지 URL을 정의합니다
-PRODUCT_URL = "https://www.kurly.com/goods/5011633"
-# 크롤링 결과를 저장할 CSV 파일 이름을 정의합니다
-OUTPUT_CSV  = "kurly_reviews.csv"
 # 크롤링할 최대 페이지 수를 정의합니다
-MAX_PAGES   = 10   
+MAX_PAGES   = 10
 # 웹 페이지 로딩을 기다릴 최대 시간(초)을 정의합니다
 WAIT_SEC    = 15
 # 페이지 이동 등 작업 후 잠시 기다릴 시간(초)을 정의합니다
 SLEEP_SEC   = 2.0
-
-PG_DSN = os.getenv("PG_DSN")
 
 # 데이터 클래스를 사용하여 리뷰 데이터의 구조를 정의합니다
 @dataclass
@@ -54,7 +49,7 @@ def setup_driver(headless: bool = True) -> webdriver.Chrome:
     opts.add_argument("--no-sandbox")
     opts.add_argument("--window-size=1400,2200")
     opts.add_argument("--lang=ko-KR")
-    opts.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    opts.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64" \
                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
@@ -143,7 +138,7 @@ JS_PARSE = r"""(() => {
 
     const root = header.closest('section') || header.parentElement || document;
     const nodes = root.querySelectorAll('li, article, div[role="listitem"], div[data-testid*="review"]');
-    const dateRe = /(20\d{2}[-./]\d{2}[-./]\d{2})/
+    const dateRe = /(20\d{2}[-./]\d{2}[-./]\d{2})/;
     const items = [];
     for (const el of nodes) {
       const text = (el.innerText || '').trim();
@@ -298,7 +293,7 @@ def crawl(url: str, max_pages=MAX_PAGES) -> List[Review]:
             page += 1
             try:
                 wait_any(drv, [
-                    "//h2[contains(., '상품 후기') or contains(., '후기')નું",
+                    "//h2[contains(., '상품 후기') or contains(., '후기')]",
                     "//section[.//h2[contains(., '후기')]]//*[self::li or self::article or @role='listitem']"
                 ], timeout=WAIT_SEC)
             except Exception:
@@ -328,9 +323,6 @@ def get_pg_conn():
         client_encoding='utf8'
     )
 
-# 데이터베이스에 저장할 테이블 이름을 정의합니다
-TABLE_NAME = "reviews"
-
 # 크롤링한 리뷰 데이터를 PostgreSQL에 저장하는 함수입니다
 def save_postgres(reviews: List[Review]):
     try:
@@ -350,20 +342,8 @@ def save_postgres(reviews: List[Review]):
     conn = get_pg_conn()
     try:
         with conn, conn.cursor() as cur:
-            cur.execute(f"""
-            CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
-              id BIGSERIAL PRIMARY KEY,
-              product_name VARCHAR(255),
-              content TEXT NOT NULL,
-              review_date DATE,
-              content_hash CHAR(64) NOT NULL UNIQUE,
-              created_at TIMESTAMPTZ DEFAULT now()
-            );
-            """)
-            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE_NAME}_review_date ON {TABLE_NAME} (review_date);")
-            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE_NAME}_product_name ON {TABLE_NAME} (product_name);")
-            execute_values(cur, f"""
-                INSERT INTO {TABLE_NAME} (product_name, content, review_date, content_hash)
+            execute_values(cur, """
+                INSERT INTO reviews (product_name, content, review_date, content_hash)
                 VALUES %s
                 ON CONFLICT (content_hash) DO NOTHING
             """, rows, page_size=1000)
@@ -371,27 +351,14 @@ def save_postgres(reviews: List[Review]):
     finally:
         conn.close()
 
-# 크롤링한 리뷰 데이터를 CSV 파일로 저장하는 함수입니다
-def save_csv(reviews: List[Review], path: str):
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
-        w = csv.DictWriter(f, fieldnames=["product_name", "content","date"])
-        w.writeheader()
-        for r in reviews:
-            w.writerow({
-                "product_name": r.product_name or "",
-                "content": (r.content or "").replace("\r"," ").replace("\n"," ").strip(),
-                "date": r.date or ""
-            })
-
-
 # 이 스크립트가 직접 실행될 때 호출되는 메인 블록입니다
 if __name__ == "__main__":
-    # 지정된 URL과 페이지 수만큼 크롤링을 실행합니다
-    reviews = crawl(PRODUCT_URL, max_pages=MAX_PAGES)
+    parser = argparse.ArgumentParser(description='마켓컬리 상품 리뷰 크롤러')
+    parser.add_argument('url', type=str, help='크롤링할 상품 페이지 URL')
+    parser.add_argument('--max_pages', type=int, default=MAX_PAGES, help=f'최대 크롤링 페이지 수 (기본값: {MAX_PAGES})')
+    args = parser.parse_args()
+
+    reviews = crawl(args.url, max_pages=args.max_pages)
     print("Collected (after dedupe):", len(reviews))
-    # 크롤링된 리뷰가 있으면 CSV 파일과 PostgreSQL에 모두 저장합니다
     if reviews:
-        save_csv(reviews, OUTPUT_CSV)
-        print("Saved ->", OUTPUT_CSV)
         save_postgres(reviews)
